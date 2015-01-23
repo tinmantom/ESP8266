@@ -1,5 +1,10 @@
 /*
 client to send energy data from sensor board to server board using esp8266 - Tom Dixon Jan 2015
+
+to do
+sensor readings&calibration/scaling
+windspeed
+
 */
 
     #include <SoftwareSerial.h>
