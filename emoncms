@@ -19,7 +19,7 @@
     void loop()
     {    
     //do some readings to work out volts and amps
-    int voltage=(200*((millis())/1000));
+    int voltage=(200*((millis())/1000)); // lets make it go and down a bit!
     int current=10;
   
     emoncms(voltage, current); //send these readings to emoncms server as csv 
