@@ -1,4 +1,4 @@
-    #include <SoftwareSerial.h>
+    #include <SoftwareSerial.h> //note - you need to increase the software serial buffer size in SoftwareSerial.h, line ~42. I set it to 128
     #define DEBUG true
     #define SERIAL_BUFFER_SIZE 100
     SoftwareSerial esp8266(14,15); // espTX==>arduinoA1, espRX==>A2
