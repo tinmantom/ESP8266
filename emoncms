@@ -1,8 +1,10 @@
     #include <SoftwareSerial.h> //note - you need to increase the software serial buffer size in SoftwareSerial.h, line ~42. I set it to 128
+    #include <EmonLib.h>
     #define DEBUG true
     #define SERIAL_BUFFER_SIZE 100
+    
     SoftwareSerial esp8266(14,15); // espTX==>arduinoA1, espRX==>A2
-
+    EnergyMonitor emon1;           // Create an instance of open energy montior
     void setup()
     {
     Serial.begin(9600);
@@ -11,18 +13,24 @@
     //setting up the esp using AT commands
     sendData("AT+RST\r\n",2000,DEBUG); // reset module
     sendData("AT+CWMODE=1\r\n",1000,DEBUG); // configure as client
-    sendData("AT+CWJAP=\"[YOUR_SSID_HERE]\",\"[YOUR_PASSWORD_HERE]\"\r\n",5000,DEBUG); //connect to local network if available
+    sendData("AT+CWJAP=\"[SSID here]\",\"[Password here]\"\r\n",5000,DEBUG); //connect to local network if available - remove square brackets
     sendData("AT+CIFSR\r\n",3000,DEBUG); // get ip address(es)
     sendData("AT+CIPMUX=0\r\n",1000,DEBUG); 
-    }
+
+emon1.current(2,45);   //Current:input pin, calibration     - see http://www.openenergymonitor.org/emon/buildingblocks/calibration
+  
+}
      
     void loop()
     {    
     //do some readings to work out volts and amps
-    int voltage=(200*((millis())/1000)); // lets make it go and down a bit!
-    int current=10;
-  
-    emoncms(voltage, current); //send these readings to emoncms server as csv 
+//    int voltage=(200*((millis())/1000)); // lets make it go and down a bit!
+
+    double Irms = emon1.calcIrms(14000);  //Calculate Irms only
+    Serial.println(Irms);
+    int current = Irms*100;  //can't think of how to send doubles esp8266
+   // Serial.println(current);
+    emoncms(current); //send these readings to emoncms server as csv 
     delay(10000); //don't overload the server!
     }
     
@@ -47,14 +55,12 @@ String sendData(String command, const int timeout, boolean debug)
     return response;
 }
     
-    int emoncms(int volt, int amp)
+    int emoncms(int amp)
 {
   sendData("AT+CIPSTART=\"TCP\",\"emoncms.org\",80\r\n",2000,DEBUG);
   String cmd="GET /input/post.json?csv=";
-  cmd+=volt;
-  cmd+=",";
-  cmd+=amp;
-  cmd+="&apikey=[YOUR_EMONCMS_API_KEY_HERE] HTTP/1.0\r\nHost: emoncms.org\r\n\r\n\r\n"; //note the space(s) are important
+  cmd+= amp;
+  cmd+="&apikey=[Emoncms key here] HTTP/1.0\r\nHost: emoncms.org\r\n\r\n\r\n"; //note the space(s) are important, again remove brackets
   esp8266.print("AT+CIPSEND=");
   esp8266.println((cmd.length())+4);
   delay(2000);
