@@ -1,73 +1,98 @@
     #include <SoftwareSerial.h> //note - you need to increase the software serial buffer size in SoftwareSerial.h, line ~42. I set it to 128
     #include <EmonLib.h>
     #define DEBUG true
-    #define SERIAL_BUFFER_SIZE 100
-    
-    SoftwareSerial esp8266(14,15); // espTX==>arduinoA1, espRX==>A2
+    #define SERIAL_BUFFER_SIZE 128
+    #define LED 13
+    #define RESET 14 // espRST==>A0
+    SoftwareSerial esp8266(15,16); // espTX==>arduinoA1, espRX==>A2
     EnergyMonitor emon1;           // Create an instance of open energy montior
+    int resetLoopSize=12;          //each signal takes roughly 5 seconds so 12=~1 minute between resets     
+    
     void setup()
-    {
+  {
     Serial.begin(9600);
     esp8266.begin(9600); 
-    
-    //setting up the esp using AT commands
-    sendData("AT+RST\r\n",2000,DEBUG); // reset module
-    sendData("AT+CWMODE=1\r\n",1000,DEBUG); // configure as client
-    sendData("AT+CWJAP=\"[SSID here]\",\"[Password here]\"\r\n",5000,DEBUG); //connect to local network if available - remove square brackets
-    sendData("AT+CIFSR\r\n",3000,DEBUG); // get ip address(es)
-    sendData("AT+CIPMUX=0\r\n",1000,DEBUG); 
+    setupwifi();
+    emon1.current(3,56);   //Current:input pin, calibration 36ohm burden resistor   
+    pinMode(RESET,OUTPUT);
+    pinMode(LED,OUTPUT);
+    hardwareReset();  
+  }
 
-emon1.current(2,45);   //Current:input pin, calibration     - see http://www.openenergymonitor.org/emon/buildingblocks/calibration
-  
-}
-     
     void loop()
-    {    
-    //do some readings to work out volts and amps
-//    int voltage=(200*((millis())/1000)); // lets make it go and down a bit!
+  { 
+    int counter=0;
+    while (counter<resetLoopSize)    //runs loop until resetLoopSize then do a reset 
+      {
+        setupwifi();
+        double Irms = emon1.calcIrms(14000);  //Calculate Irms only
+        int current = Irms*100;  //can't think of how to send doubles esp8266
+        emoncms(current); //send these readings to emoncms server as csv 
+        delay(2000); //don't overload the server!
+        counter++; //move our counter on  
+      }
+    hardwareReset(); //reboot the ESP8266 after our resetloop   
+  }
 
-    double Irms = emon1.calcIrms(14000);  //Calculate Irms only
-    Serial.println(Irms);
-    int current = Irms*100;  //can't think of how to send doubles esp8266
-   // Serial.println(current);
-    emoncms(current); //send these readings to emoncms server as csv 
-    delay(10000); //don't overload the server!
-    }
+//routine to send data to the ESP8266 with a timeout feature
     
-String sendData(String command, const int timeout, boolean debug)
-{
+    String sendData(String command, const int timeout, boolean debug)
+  {
     String response = "";
     esp8266.print(command); // send the read character to the esp8266
     long int time = millis();
     while( (time+timeout) > millis())
     {
-    while(esp8266.available())
-    {
-    // The esp has data so display its output to the serial window
-    char c = esp8266.read(); // read the next character.
-    response+=c;
-    }
+      while(esp8266.available())
+      {
+       // The esp has data so display its output to the serial window
+       char c = esp8266.read(); // read the next character.
+       response+=c;
+      }
     }
     if(debug)
-    {
-    Serial.print(response);
-    }
+      {
+       Serial.print(response);
+      }
     return response;
-}
-    
-    int emoncms(int amp)
-{
-  sendData("AT+CIPSTART=\"TCP\",\"emoncms.org\",80\r\n",2000,DEBUG);
-  String cmd="GET /input/post.json?csv=";
-  cmd+= amp;
-  cmd+="&apikey=[Emoncms key here] HTTP/1.0\r\nHost: emoncms.org\r\n\r\n\r\n"; //note the space(s) are important, again remove brackets
-  esp8266.print("AT+CIPSEND=");
-  esp8266.println((cmd.length())+4);
-  delay(2000);
-  if(esp8266.find(">"))
-  {
-    esp8266.println(cmd);
-    esp8266.print("\r\n");  
   }
-  sendData("AT+CIPCLOSE\r\n",1000,DEBUG);
-}
+    
+//routine to send our packet to the emoncms server
+    int emoncms(int amp)
+   {
+    sendData("AT+CIPSTART=\"TCP\",\"emoncms.org\",80\r\n",2000,DEBUG);
+    String cmd="GET /input/post.json?csv=";
+    cmd+= amp;
+    cmd+="&apikey=[emoncmsAPIkeyhere] HTTP/1.0\r\nHost: emoncms.org\r\n\r\n\r\n"; //note the space(s) are important
+    esp8266.print("AT+CIPSEND=");
+    esp8266.println((cmd.length())+4);
+    delay(2000);
+    if(esp8266.find(">"))
+     {
+      esp8266.println(cmd);
+      esp8266.print("\r\n");  
+     }
+    sendData("AT+CIPCLOSE\r\n",1000,DEBUG);
+   }
+
+//routine to setup the ESP8266 using AT commands
+    void setupwifi()
+   {
+    sendData("AT+RST\r\n",2000,DEBUG); // reset module
+    sendData("AT+CWMODE=1\r\n",1000,DEBUG); // configure as client
+    sendData("AT+CWJAP=\"[SSID]\",\"[PASSWORD]\"\r\n",5000,DEBUG); //connect to local network if available
+    sendData("AT+CIFSR\r\n",3000,DEBUG); // get ip address(es)
+    sendData("AT+CIPMUX=0\r\n",1000,DEBUG); 
+   }
+
+//routine to hardware reset the ESP8266 - used periodically to aid stability! 
+
+    void hardwareReset()
+   {
+    digitalWrite(RESET,LOW);
+    digitalWrite(LED,HIGH);
+    Serial.println("ESP Hardware reset");
+    delay(100);
+    digitalWrite(RESET,HIGH);
+    digitalWrite(LED,LOW);
+   }
