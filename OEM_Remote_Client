@@ -1,0 +1,116 @@
+    #include <SoftwareSerial.h> //note - you need to increase the software serial buffer size in SoftwareSerial.h, line ~42. I set it to 128
+    #include <EmonLib.h>
+  
+    #define DEBUG true
+    #define SERIAL_BUFFER_SIZE 128
+    #define LED 13
+    #define RESET 14 // espRST==>A0
+    SoftwareSerial esp8266(15,16); // espTX==>arduinoA1, espRX==>A2
+    EnergyMonitor emon1;           // Create an instance of open energy montior
+    
+    int resetLoopSize=5;
+    void setup()
+  {
+    Serial.begin(9600);
+    esp8266.begin(9600); 
+    //setupwifi();
+    emon1.current(3,56);   //Current:input pin, calibration 36ohm burden resistor   
+    pinMode(RESET,OUTPUT);
+    pinMode(LED,OUTPUT);
+    hardwareReset();  
+
+}
+     
+    void loop()
+  { 
+      int counter=0;
+      setupwifi();
+      while (counter<resetLoopSize)    //lets loop for an hour then do a reset 
+      {
+        //setupwifi();
+    
+    double Irms = emon1.calcIrms(14000);  //Calculate Irms only
+    Serial.println(Irms);
+    int current = Irms*100;  //can't think of how to send doubles esp8266
+   // Serial.println(current);
+    emonRemote(current); //send these readings to emoncms server as csv 
+    delay(3000); //don't overload the server!
+    counter++; //move our hourly counter on  
+    hardwareReset();
+      }
+      
+        
+      
+  }
+    
+    String sendData(String command, const int timeout, boolean debug)
+  {
+    String response = "";
+    esp8266.print(command); // send the read character to the esp8266
+ 
+    long int time = millis();
+    while( (time+timeout) > millis())
+    {
+      while(esp8266.available())
+       {
+    // The esp has data so display its output to the serial window
+    char c = esp8266.read(); // read the next character.
+    response+=c;
+       }
+    }
+    if(debug)
+    {
+    Serial.print(response);
+    }
+    return response;
+  
+}
+    
+    int emonRemote(int amp)
+{
+  sendData("AT+CIPSTART=\"TCP\",\"192.168.4.1\",80\r\n",2000,DEBUG);
+  String cmd="current=";
+  if (amp<1000)
+  {
+    cmd+="0";
+  }
+  if (amp<100)
+  {
+    cmd+="0";
+  } 
+   if (amp<10)
+  {
+    cmd+="0";
+  }
+  cmd+= amp;
+  esp8266.print("AT+CIPSEND=");
+  esp8266.println((cmd.length())+4);
+  //delay(2000);
+  if(esp8266.find(">"))
+  {
+    esp8266.println(cmd);
+    esp8266.print("\r\n");  
+  }
+  delay(3000);
+  sendData("AT+CIPCLOSE\r\n",1000,DEBUG);
+}
+
+void setupwifi()
+{
+   //setting up the esp using AT commands
+    sendData("AT+RST\r\n",2000,DEBUG); // reset module
+    sendData("AT+CWMODE=1\r\n",1000,DEBUG); // configure as client
+    sendData("AT+CWJAP=\"ESP_9F55DF\"\r\n",5000,DEBUG); //connect to ESP_Remote server - change to match host SSID and password
+    sendData("AT+CIFSR\r\n",3000,DEBUG); // get ip address(es)
+    sendData("AT+CIPMUX=0\r\n",1000,DEBUG); 
+}
+
+void hardwareReset()
+{
+  digitalWrite(RESET,LOW);
+  digitalWrite(LED,HIGH);
+  Serial.println("ESP Hardware reset");
+  delay(100);
+  digitalWrite(RESET,HIGH);
+  digitalWrite(LED,LOW);
+}
