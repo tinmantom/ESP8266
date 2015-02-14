@@ -3,11 +3,12 @@
     #define DEBUG true
     #define SERIAL_BUFFER_SIZE 128
     #define RESET 19 // esp RST==A5
-
     SoftwareSerial esp8266(14,15);  //espRX==A0 espTX==A1
     LiquidCrystal lcd(7, 6, 5, 4, 3, 2);
     unsigned long sensorPreviousTime = 0; //used for reset timing
     unsigned long internetPreviousTime = 0;
+    int sensorTimeout=60000;
+    int internetTimeout=60000;
     void setup()
     
    {
@@ -21,8 +22,11 @@
     lcd.setCursor(0,0);
     lcd.print("Booting      ");
     setupwifi();
+    connectWiFi();
+    lcd.setCursor(0,0);
+    lcd.print("Connected!");
     sensorPreviousTime = millis(); //Timer since last connected to sensor
-    internetPreviousTime = millis();
+    internetPreviousTime = millis(); //Timer since last connected to internet
    }
      
     void loop()
@@ -31,17 +35,22 @@
        {
         Serial.println("a minute has passed with no received signal - lets reset!");
         lcd.setCursor(0,0);
-        lcd.print("Low sensor sig");
+        lcd.print("No sensor data");
         sensorPreviousTime = millis();
         hardwareReset();
         delay(1000);
         setupwifi();
+        
        }
-     if ((millis() - internetPreviousTime) >=60000)
+    
+     if ((millis() - internetPreviousTime) >=90000)
         {
           Serial.println("InternetTimer");
+          hardwareReset();
           setupwifi();
+          connectWiFi();
           internetPreviousTime = millis();
+          Serial.println("Internet Timer Reset");
         }
         
     if (esp8266.available()) // check if the esp is sending a message
@@ -69,22 +78,20 @@
             String closeCommand = "AT+CIPCLOSE=";
                    closeCommand +=connectionId; // append connection id
                    closeCommand +="\r\n";
+          sendData(closeCommand,1000,DEBUG); // close connection
+            
+          //lets check whether we're actually online
           
-            sendData(closeCommand,1000,DEBUG); // close connection
-            
-            
-            
-            emoncms(current); //send the current to emoncms for processing
-            delay(500);
-            
-            
-            
-            
-           }
-           
-      }
-
-}
+          if (connectWiFi()==true)
+             {
+              emoncms(current); //send the current to emoncms for processing
+             }    
+          
+         
+                                 
+           }//end of processing new current reading
+      }//end of there being something on the esp serial
+}//end of void loop!
 
 
 
@@ -99,43 +106,59 @@ String sendData(String command, const int timeout, boolean debug)
                 {
                  // The esp has data so display its output to the serial window
                  char c = esp8266.read(); // read the next character.
-                 response+=c;
-                 
-                 
-                 
-              }
-         
-        }
+                 response+=c;              
+                }
+           }
     if (debug)
        {
+         
         Serial.print(response);
-       }
+
+     }
        
-    return response;
+     return response;
    
 }
     
 int emoncms(int amp)
 {
   sendData("AT+CIPMUX=0\r\n",1000,DEBUG);
-  sendData("AT+CIPSTART=\"TCP\",\"emoncms.org\",80\r\n",2000,DEBUG);
-  String cmd="GET /input/post.json?csv=";
-  cmd+=amp;
-  cmd+="&apikey=[EMONCMS_API_KEY_HERE] HTTP/1.0\r\nHost: emoncms.org\r\n\r\n\r\n";
-  esp8266.print("AT+CIPSEND=");
-  esp8266.println((cmd.length())+4);
-  delay(2000);
-  if (esp8266.find(">"))
-     {
-      esp8266.println(cmd);
-      esp8266.print("\r\n");  
-     }
- 
-  sendData("AT+CIPCLOSE\r\n",1000,DEBUG);           
-  sendData("AT+CIPMUX=1\r\n",1000,DEBUG);
-  
+  String cipStatus= sendData("AT+CIPSTART=\"TCP\",\"emoncms.org\",80\r\n",500,DEBUG);
+  Serial.println(cipStatus);
+  char charBuf1[50];
+  cipStatus.toCharArray(charBuf1, 50);
+  String OKStatus = 0;
+         OKStatus += charBuf1[39];
+     if (OKStatus=="O")
+        {
+         Serial.println("Woohoo - we're connected to emoncms.");
+         String cmd="GET /input/post.json?csv=";
+                cmd+=amp;
+                cmd+="&apikey=[EMONCMS_API_KEY] HTTP/1.0\r\nHost: emoncms.org\r\n\r\n\r\n";
+         esp8266.print("AT+CIPSEND=");
+         esp8266.println((cmd.length())+4);
+         delay(500);
+         if (esp8266.find(">"))
+             {
+              esp8266.println(cmd);
+              esp8266.print("\r\n");
+             }
+         sendData("AT+CIPCLOSE\r\n",1000,DEBUG);  
+         delay(500);
+         sendData("AT+CIPMUX=1\r\n",1000,DEBUG);
+         internetPreviousTime = millis(); //we've made a sucessful transmission!
+         Serial.println ("Successful transmission, reset internet timer");
+        }
+     if (OKStatus=="R")
+        {
+         Serial.println("Maybe we're already connected?");
+         sendData("AT+CIPCLOSE\r\n",1000,DEBUG);
+        } 
+     
+     sendData("AT+CIPCLOSE\r\n",1000,DEBUG);
+     delay(500);
+     sendData("AT+CIPMUX=1\r\n",1000,DEBUG);
 }
-
 
 void setupwifi()
 {
@@ -146,11 +169,9 @@ void setupwifi()
 
     sendData("AT+CIPMUX=1\r\n",1000,DEBUG); 
     sendData("AT+CIPSERVER=1,80\r\n",1000,DEBUG); // turn on server on port 80
-    sendData("AT+CWJAP=\"[SSID]\",\"[PASSWORD]\"\r\n",5000,DEBUG); //connect to local network if available
 internetPreviousTime = millis(); //reset (the) reset timer!
 Serial.println ("reset internet timer!"); 
-  lcd.setCursor(0,0);
-    lcd.print("Connected!"); 
+ 
 }
 
 void hardwareReset()
@@ -163,4 +184,28 @@ void hardwareReset()
   digitalWrite(RESET,HIGH);
   delay(500);
 
+}
+
+boolean connectWiFi()
+{
+     
+String connectStatus= sendData("AT+CWJAP=\"[SSID]\",\"[PASSWORD]\"\r\n",5000,DEBUG);
+Serial.println(connectStatus);
+char charBuf[50];
+connectStatus.toCharArray(charBuf, 50);
+String OKStatus = 0;
+       OKStatus += charBuf[39];
+       
+if (OKStatus=="O")
+   {
+     
+         Serial.println("Woohoo - we're connected to the WiFi.");
+         return true;
+      
+   }
+else
+{
+Serial.println("Can not connect to the WiFi.");
+return false;
+}
 }
