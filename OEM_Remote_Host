@@ -1,0 +1,166 @@
+    #include <SoftwareSerial.h>
+    #include <LiquidCrystal.h>
+    #define DEBUG true
+    #define SERIAL_BUFFER_SIZE 128
+    #define RESET 19 // esp RST==A5
+
+    SoftwareSerial esp8266(14,15);  //espRX==A0 espTX==A1
+    LiquidCrystal lcd(7, 6, 5, 4, 3, 2);
+    unsigned long sensorPreviousTime = 0; //used for reset timing
+    unsigned long internetPreviousTime = 0;
+    void setup()
+    
+   {
+    Serial.begin(9600);
+    esp8266.begin(9600); 
+    lcd.begin(16, 2);  //LCD with 16x2 pixels
+    lcd.print("OEM Remote V1");
+    delay(500);
+    pinMode(RESET,OUTPUT);
+    hardwareReset();
+    lcd.setCursor(0,0);
+    lcd.print("Booting      ");
+    setupwifi();
+    sensorPreviousTime = millis(); //Timer since last connected to sensor
+    internetPreviousTime = millis();
+   }
+     
+    void loop()
+{  
+    if ((millis() - sensorPreviousTime) >= 60000)
+       {
+        Serial.println("a minute has passed with no received signal - lets reset!");
+        lcd.setCursor(0,0);
+        lcd.print("Low sensor sig");
+        sensorPreviousTime = millis();
+        hardwareReset();
+        delay(1000);
+        setupwifi();
+       }
+     if ((millis() - internetPreviousTime) >=60000)
+        {
+          Serial.println("InternetTimer");
+          setupwifi();
+          internetPreviousTime = millis();
+        }
+        
+    if (esp8266.available()) // check if the esp is sending a message
+       {
+        if (esp8266.find("+IPD,"))
+           {
+            delay(2000); // wait for the serial buffer to fill up (read all the serial data)
+            int connectionId = esp8266.read()-48; // subtract 48 because the read() function returnsthe ASCII decimal value and 0 (the first decimal number) starts at 48
+            delay(500);
+            esp8266.find("current="); // advance cursor to "current="
+            int current = (esp8266.read()-48)*1000; // 
+            current += (esp8266.read()-48)*100;
+            current += (esp8266.read()-48)*10;
+            current += (esp8266.read()-48);
+            Serial.print("Current=");
+            Serial.println(current);
+            int power=((current)*2.30);
+            lcd.setCursor(0,0);
+            lcd.print("Power="); 
+            lcd.print(power);
+            lcd.print("W    ");   
+            sensorPreviousTime = millis(); //reset (the) reset timer!
+            Serial.println("reset sensor Timer"); 
+            
+            String closeCommand = "AT+CIPCLOSE=";
+                   closeCommand +=connectionId; // append connection id
+                   closeCommand +="\r\n";
+          
+            sendData(closeCommand,1000,DEBUG); // close connection
+            
+            
+            
+            emoncms(current); //send the current to emoncms for processing
+            delay(500);
+            
+            
+            
+            
+           }
+           
+      }
+
+}
+
+
+
+String sendData(String command, const int timeout, boolean debug)
+{
+    String response = "";
+    esp8266.print(command); // send the read character to the esp8266
+    long int time = millis();
+    while ((time+timeout) > millis())
+          {
+          while (esp8266.available())
+                {
+                 // The esp has data so display its output to the serial window
+                 char c = esp8266.read(); // read the next character.
+                 response+=c;
+                 
+                 
+                 
+              }
+         
+        }
+    if (debug)
+       {
+        Serial.print(response);
+       }
+       
+    return response;
+   
+}
+    
+int emoncms(int amp)
+{
+  sendData("AT+CIPMUX=0\r\n",1000,DEBUG);
+  sendData("AT+CIPSTART=\"TCP\",\"emoncms.org\",80\r\n",2000,DEBUG);
+  String cmd="GET /input/post.json?csv=";
+  cmd+=amp;
+  cmd+="&apikey=[EMONCMS_API_KEY_HERE] HTTP/1.0\r\nHost: emoncms.org\r\n\r\n\r\n";
+  esp8266.print("AT+CIPSEND=");
+  esp8266.println((cmd.length())+4);
+  delay(2000);
+  if (esp8266.find(">"))
+     {
+      esp8266.println(cmd);
+      esp8266.print("\r\n");  
+     }
+ 
+  sendData("AT+CIPCLOSE\r\n",1000,DEBUG);           
+  sendData("AT+CIPMUX=1\r\n",1000,DEBUG);
+  
+}
+
+
+void setupwifi()
+{
+   //setting up the esp using AT commands
+    sendData("AT+RST\r\n",2000,DEBUG); // reset module
+    sendData("AT+CWMODE=3\r\n",1000,DEBUG); // configure as client and server
+    sendData("AT+CIFSR\r\n",3000,DEBUG); // get ip address(es)
+
+    sendData("AT+CIPMUX=1\r\n",1000,DEBUG); 
+    sendData("AT+CIPSERVER=1,80\r\n",1000,DEBUG); // turn on server on port 80
+    sendData("AT+CWJAP=\"[SSID]\",\"[PASSWORD]\"\r\n",5000,DEBUG); //connect to local network if available
+internetPreviousTime = millis(); //reset (the) reset timer!
+Serial.println ("reset internet timer!"); 
+  lcd.setCursor(0,0);
+    lcd.print("Connected!"); 
+}
+
+void hardwareReset()
+{
+  digitalWrite(RESET,LOW);
+
+  Serial.println("ESP Hardware reset");
+  
+  delay(100);
+  digitalWrite(RESET,HIGH);
+  delay(500);
+
+}
